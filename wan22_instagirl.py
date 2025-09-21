@@ -148,16 +148,17 @@ def hf_download():
             shutil.copyfileobj(response.raw, f)
         print(f"Downloaded {filename} successfully!")
 
-    # Instagirlv2.5 LoRA (updated version from the image)
-    # Model Version ID from the CivitAI page: appears to be the latest version
+    # Instagirlv2.5 LoRA (correct version ID from the provided link)
+    # Model Version ID: 2180477 (from modelVersionId parameter in the URL)
     try:
         download_civitai_file(
-            "1822984",  # This is from the URL in your first image
+            "2180477",  # Correct version ID for v2.5
             "Instagirlv2.5.safetensors",
             lora_dir
         )
     except Exception as e:
         print(f"Failed to download Instagirlv2.5 LoRA: {e}")
+        print("Manual download available at: https://civitai.com/models/1822984?modelVersionId=2180477")
     
     # l3n0v0 LoRA (from second image)
     # Model Version ID: 2006914 (from the URL in your second image)
