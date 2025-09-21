@@ -46,6 +46,9 @@ def hf_download():
     from huggingface_hub import hf_hub_download
     import requests
     import shutil
+    import zipfile
+    import tempfile
+    import re
 
     # Create necessary directories
     diffusion_models_dir = "/root/comfy/ComfyUI/models/diffusion_models"
@@ -153,42 +156,101 @@ def hf_download():
         check=True,
     )
 
-    # ========================================================================
-    # CIVITAI DOWNLOADS (LoRA Models)
-    # ========================================================================
+    # ---------- Civitai helpers ----------
+    def download_civitai_zip(model_version_id, filename, target_dir):
+        """Download a ZIP from CivitAI using modelVersionId to target_dir/filename"""
+        target_path = os.path.join(target_dir, filename)
+        url = f"https://civitai.com/api/download/models/{model_version_id}"
+        print(f"Downloading ZIP {filename} from CivitAI...")
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        r = requests.get(url, stream=True, headers=headers)
+        r.raise_for_status()
+        with open(target_path, "wb") as f:
+            shutil.copyfileobj(r.raw, f)
+        print(f"Downloaded ZIP: {target_path}")
+        return target_path
+
+    def process_lora_zip(zip_path, target_dir, base_alias="Instagirlv2.5"):
+        """
+        Extracts a Civitai LoRA zip and moves .safetensors into target_dir.
+        Also creates two convenient symlinks (if high/low can be inferred):
+          - {base_alias}_high_noise.safetensors
+          - {base_alias}_low_noise.safetensors
+        """
+        print(f"Extracting: {zip_path}")
+        with tempfile.TemporaryDirectory() as td:
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                zf.extractall(td)
+
+            # Collect .safetensors files and move to target_dir
+            extracted = []
+            for root, _, files in os.walk(td):
+                for fn in files:
+                    if fn.lower().endswith(".safetensors"):
+                        src = os.path.join(root, fn)
+                        dst = os.path.join(target_dir, fn)
+                        os.makedirs(target_dir, exist_ok=True)
+                        shutil.move(src, dst)
+                        extracted.append(dst)
+                        print(f"→ Placed LoRA: {dst}")
+
+        # Try to infer high/low from filenames and create stable aliases
+        high_pat = re.compile(r"(?:^|[-_])high(?:[-_]?noise)?(?:[-_.]|$)", re.IGNORECASE)
+        low_pat  = re.compile(r"(?:^|[-_])low(?:[-_]?noise)?(?:[-_.]|$)",  re.IGNORECASE)
+
+        high_file = next((p for p in extracted if high_pat.search(os.path.basename(p))), None)
+        low_file  = next((p for p in extracted if low_pat.search(os.path.basename(p))),  None)
+
+        def safe_symlink(src, alias_name):
+            alias_path = os.path.join(target_dir, alias_name)
+            try:
+                if os.path.islink(alias_path) or os.path.exists(alias_path):
+                    os.remove(alias_path)
+                os.symlink(src, alias_path)
+                print(f"✓ Symlinked {alias_name} -> {os.path.basename(src)}")
+            except Exception as e:
+                print(f"Symlink failed for {alias_name}: {e}")
+
+        if high_file:
+            safe_symlink(high_file, f"{base_alias}_high_noise.safetensors")
+        if low_file:
+            safe_symlink(low_file,  f"{base_alias}_low_noise.safetensors")
+
+        # Optionally remove the original ZIP to keep the image slim
+        try:
+            os.remove(zip_path)
+        except Exception:
+            pass
+
+    # Instagirlv2.5 LoRA (ZIP that includes high_noise & low_noise)
+    try:
+        zip_path = download_civitai_zip(
+            "2180477",                # modelVersionId for Instagirl v2.5
+            "Instagirlv2.5.zip",      # saved filename
+            lora_dir
+        )
+        process_lora_zip(zip_path, lora_dir, base_alias="Instagirlv2.5")
+    except Exception as e:
+        print(f"Failed to download/process Instagirlv2.5 ZIP: {e}")
+        print("Manual link: https://civitai.com/models/1822984?modelVersionId=2180477")
+
+    # If you still want to grab another single-file LoRA from Civitai, here's a simple helper:
     def download_civitai_file(model_version_id, filename, target_dir):
-        """Download file from CivitAI using model version ID"""
         target_path = os.path.join(target_dir, filename)
         url = f"https://civitai.com/api/download/models/{model_version_id}"
         print(f"Downloading {filename} from CivitAI...")
-
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        }
-
-        response = requests.get(url, stream=True, headers=headers)
-        response.raise_for_status()
-
-        import shutil as _shutil
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        r = requests.get(url, stream=True, headers=headers)
+        r.raise_for_status()
         with open(target_path, "wb") as f:
-            _shutil.copyfileobj(response.raw, f)
+            shutil.copyfileobj(r.raw, f)
         print(f"Downloaded {filename} successfully!")
+        return target_path
 
-    # Instagirlv2.5 LoRA (modelVersionId=2180477)
+    # Example: l3n0v0 LoRA (single file)
     try:
         download_civitai_file(
-            "2180477",
-            "Instagirlv2.5.safetensors",
-            lora_dir,
-        )
-    except Exception as e:
-        print(f"Failed to download Instagirlv2.5 LoRA: {e}")
-        print("Manual download available at: https://civitai.com/models/1822984?modelVersionId=2180477")
-
-    # l3n0v0 LoRA (modelVersionId=2006914)
-    try:
-        download_civitai_file(
-            "2006914",
+            "2006914",           # modelVersionId
             "l3n0v0.safetensors",
             lora_dir,
         )
