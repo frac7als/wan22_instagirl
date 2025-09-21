@@ -37,6 +37,7 @@ image = image.run_commands(
     "git clone https://github.com/rgthree/rgthree-comfy.git /root/comfy/ComfyUI/custom_nodes/rgthree-comfy",
     "git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git /root/comfy/ComfyUI/custom_nodes/ComfyUI-VideoHelperSuite",
     "git clone https://github.com/Fannovel16/ComfyUI-Frame-Interpolation.git /root/comfy/ComfyUI/custom_nodes/ComfyUI-Frame-Interpolation",
+    "git clone https://github.com/giriss/comfy-image-saver.git /root/comfy/ComfyUI/custom_nodes/comfy-image-saver",
 )
 
 def hf_download():
