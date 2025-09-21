@@ -148,80 +148,115 @@ def hf_download():
     )
 
     # ========================================================================
-    # Instagirlv2.5 ZIP handling
+    # Instagirl v2.5 – force the exact Diffusers ZIP link you showed
     # ========================================================================
-    def download_civitai_zip(model_version_id, filename, target_dir):
-        target_path = os.path.join(target_dir, filename)
-        url = f"https://civitai.com/api/download/models/{model_version_id}"
-        print(f"Downloading ZIP {filename} from CivitAI...")
+    def is_zip_file(path):
+        try:
+            with open(path, "rb") as f:
+                sig = f.read(4)
+            return sig == b"PK\x03\x04"
+        except Exception:
+            return False
+
+    def download_url_to(path, url, params=None, chunk_mb=8):
         headers = {"User-Agent": "Mozilla/5.0"}
-        r = requests.get(url, stream=True, headers=headers)
-        r.raise_for_status()
-        with open(target_path, "wb") as f:
-            shutil.copyfileobj(r.raw, f)
-        print(f"Downloaded ZIP: {target_path}")
-        return target_path
+        with requests.get(url, stream=True, headers=headers, params=params or {}, allow_redirects=True) as r:
+            r.raise_for_status()
+            with open(path, "wb") as f:
+                for chunk in r.iter_content(chunk_size=chunk_mb * 1024 * 1024):
+                    if chunk:
+                        f.write(chunk)
+        return path, r.headers.get("Content-Type", ""), r.headers.get("Content-Disposition", "")
 
-    def process_lora_zip(zip_path, target_dir, base_alias="Instagirlv2.5"):
-        import zipfile, tempfile, re, shutil
+    def ensure_instagirl_high_low_from_files(files, target_dir, base_alias="Instagirlv2.5"):
+        """
+        Given a list of .safetensors file paths, write/overwrite:
+          Instagirlv2.5-HIGH.safetensors
+          Instagirlv2.5-LOW.safetensors
+        Heuristics choose which is HIGH/LOW; if only one file, duplicate to both.
+        """
+        import re, shutil
+        os.makedirs(target_dir, exist_ok=True)
+        high_pat = re.compile(r"(?:^|[-_ ()])high(?:[-_ ()]?noise)?(?:[-_. ()]|$)", re.IGNORECASE)
+        low_pat  = re.compile(r"(?:^|[-_ ()])low(?:[-_ ()]?noise)?(?:[-_. ()]|$)",  re.IGNORECASE)
 
-        print(f"Extracting: {zip_path}")
-        with tempfile.TemporaryDirectory() as td:
-            with zipfile.ZipFile(zip_path, "r") as zf:
-                zf.extractall(td)
+        high_file = next((p for p in files if high_pat.search(os.path.basename(p))), None)
+        low_file  = next((p for p in files if  low_pat.search(os.path.basename(p))),  None)
 
-            # Find .safetensors inside
-            found = []
-            for root, _, files in os.walk(td):
-                for fn in files:
-                    if fn.lower().endswith(".safetensors"):
-                        found.append(os.path.join(root, fn))
-
-            if not found:
-                raise RuntimeError("No .safetensors found in ZIP")
-
-            os.makedirs(target_dir, exist_ok=True)
-            copied = []
-            for src in found:
-                dst = os.path.join(target_dir, os.path.basename(src))
-                shutil.copyfile(src, dst)
-                copied.append(dst)
-                print(f"→ Copied {dst}")
-
-        # Detect high/low
-        high_pat = re.compile(r"high", re.IGNORECASE)
-        low_pat = re.compile(r"low", re.IGNORECASE)
-
-        high_file = next((p for p in copied if high_pat.search(os.path.basename(p))), None)
-        low_file = next((p for p in copied if low_pat.search(os.path.basename(p))), None)
-
-        if not (high_file and low_file) and len(copied) == 2:
-            a, b = sorted(copied)
+        if not (high_file and low_file) and len(files) == 2:
+            a, b = sorted(files)
             if not high_file: high_file = a
-            if not low_file:  low_file = b
+            if not low_file:  low_file  = b
+
+        if not files:
+            raise RuntimeError("No safetensors files available for HIGH/LOW")
+
+        if len(files) == 1:
+            high_file = low_file = files[0]
 
         HIGH_TARGET = os.path.join(target_dir, f"{base_alias}-HIGH.safetensors")
         LOW_TARGET  = os.path.join(target_dir, f"{base_alias}-LOW.safetensors")
 
-        def write_canonical(src, dst, label):
-            if not src:
-                print(f"!! No {label} file found")
-                return
+        def write_copy(src, dst, label):
             shutil.copyfile(src, dst)
             os.chmod(dst, 0o644)
-            print(f"✓ Wrote {label}: {dst}")
+            print(f"✓ Wrote {label}: {dst} (from {os.path.basename(src)})")
 
-        write_canonical(high_file, HIGH_TARGET, "HIGH")
-        write_canonical(low_file, LOW_TARGET, "LOW")
+        write_copy(high_file, HIGH_TARGET, "HIGH")
+        write_copy(low_file,  LOW_TARGET,  "LOW")
 
-        try: os.remove(zip_path)
-        except: pass
+    def download_and_place_instagirl_pair_from_exact_zip(url, target_dir, base_alias="Instagirlv2.5"):
+        """
+        Downloads EXACT URL you provided (Diffusers zip), extracts, and ensures
+        Instagirlv2.5-HIGH/LOW.safetensors appear in target_dir.
+        If the server returns a single file instead of a zip, handle gracefully.
+        """
+        zip_path = os.path.join(target_dir, f"{base_alias}.zip")
+        # Your exact link uses these query params:
+        params = {"type": "Model", "format": "Diffusers"}
+        path, ctype, cd = download_url_to(zip_path, url, params=params, chunk_mb=16)
+        print(f"Downloaded Instagirl ZIP candidate: {path} (ctype={ctype}, cd={cd})")
 
+        safes = []
+        if is_zip_file(path):
+            print("→ Verified ZIP signature, extracting…")
+            with tempfile.TemporaryDirectory() as td:
+                with zipfile.ZipFile(path, "r") as zf:
+                    zf.extractall(td)
+                for root, _, files in os.walk(td):
+                    for fn in files:
+                        if fn.lower().endswith(".safetensors"):
+                            src = os.path.join(root, fn)
+                            dst = os.path.join(target_dir, fn)
+                            shutil.copyfile(src, dst)
+                            safes.append(dst)
+                            print(f"→ Extracted {dst}")
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+        else:
+            print("! File is not a ZIP; treating as a single safetensors payload")
+            # If not a zip, ensure it's named *.safetensors; if not, append extension.
+            final_name = "Instagirlv2.5.safetensors"
+            if not path.lower().endswith(".safetensors"):
+                new_path = os.path.join(target_dir, final_name)
+                shutil.move(path, new_path)
+                path = new_path
+            safes.append(path)
+            print(f"→ Saved single safetensors: {path}")
+
+        ensure_instagirl_high_low_from_files(safes, target_dir, base_alias=base_alias)
+
+    # Use your exact link
     try:
-        zip_path = download_civitai_zip("2180477", "Instagirlv2.5.zip", lora_dir)
-        process_lora_zip(zip_path, lora_dir)
+        download_and_place_instagirl_pair_from_exact_zip(
+            url="https://civitai.com/api/download/models/2180477",
+            target_dir=lora_dir,
+            base_alias="Instagirlv2.5",
+        )
     except Exception as e:
-        print(f"Failed Instagirlv2.5: {e}")
+        print(f"Failed Instagirlv2.5 handling: {e}")
 
     print("All model downloads completed!")
 
