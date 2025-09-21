@@ -65,17 +65,17 @@ def hf_download():
 
     # ========================================================================
     # WAN UNET (GGUF) MODELS — for ComfyUI-GGUF's UnetLoaderGGUF
-    # Replaces prior safetensors diffusion model downloads.
-    # Filenames match the workflow exactly.
+    # Uses QuantStack repo/paths per your note. Keeps a fallback to Phr00t.
+    # Also creates a physical copy to avoid symlink edge cases in dropdowns.
     # ========================================================================
     def hf_try_download(repo_id, filename, target_basename):
         try:
             p = hf_hub_download(repo_id=repo_id, filename=filename, cache_dir="/cache")
-            subprocess.run(
-                f"ln -sf {p} {os.path.join(unet_dir, target_basename)}",
-                shell=True,
-                check=True,
-            )
+            target_path = os.path.join(unet_dir, target_basename)
+            # Symlink to cache (fast, keeps cache benefits)
+            subprocess.run(f"ln -sf {p} {target_path}", shell=True, check=True)
+            # ALSO copy to ensure dropdowns see a real file even if symlinks are ignored
+            subprocess.run(f"cp -f {p} {target_path}.copy", shell=True, check=True)
             print(f"✔ Downloaded {target_basename} from {repo_id}/{filename}")
             return True
         except Exception as e:
@@ -85,8 +85,8 @@ def hf_download():
     # LowNoise GGUF (exact name used by the workflow)
     if not (
         hf_try_download(
-            "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
-            "split_files/gguf/Wan2.2-T2V-A14B-LowNoise-Q8_0.gguf",
+            "QuantStack/Wan2.2-T2V-A14B-GGUF",
+            "LowNoise/Wan2.2-T2V-A14B-LowNoise-Q8_0.gguf",
             "Wan2.2-T2V-A14B-LowNoise-Q8_0.gguf",
         )
         or hf_try_download(
@@ -100,8 +100,8 @@ def hf_download():
     # HighNoise GGUF (exact name used by the workflow)
     if not (
         hf_try_download(
-            "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
-            "split_files/gguf/Wan2.2-T2V-A14B-HighNoise-Q8_0.gguf",
+            "QuantStack/Wan2.2-T2V-A14B-GGUF",
+            "HighNoise/Wan2.2-T2V-A14B-HighNoise-Q8_0.gguf",
             "Wan2.2-T2V-A14B-HighNoise-Q8_0.gguf",
         )
         or hf_try_download(
@@ -281,4 +281,12 @@ app = modal.App(name="instagirlv23-comfyui", image=image)
 @modal.concurrent(max_inputs=10)
 @modal.web_server(8000, startup_timeout=60)
 def ui():
+    # Ensure ComfyUI sees the models directory we populated
+    os.environ["COMFYUI_MODEL_DIR"] = "/root/comfy/ComfyUI/models"
+
+    # Sanity logs to ensure files and node are present (helps when dropdown is empty)
+    subprocess.run("pwd && ls -la /root/comfy/ComfyUI/models/unet || true", shell=True, check=False)
+    subprocess.run("ls -la /root/comfy/ComfyUI/custom_nodes/ComfyUI-GGUF || true", shell=True, check=False)
+
+    # Launch ComfyUI
     subprocess.Popen("comfy launch -- --listen 0.0.0.0 --port 8000", shell=True)
