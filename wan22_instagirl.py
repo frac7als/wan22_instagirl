@@ -65,7 +65,7 @@ def hf_download():
 
     # ========================================================================
     # WAN UNET (GGUF) MODELS — for ComfyUI-GGUF's UnetLoaderGGUF
-    # Uses QuantStack repo/paths per your note. Keeps a fallback to Phr00t.
+    # Uses QuantStack repo/paths. Keeps Phr00t as fallback.
     # Also creates a physical copy to avoid symlink edge cases in dropdowns.
     # ========================================================================
     def hf_try_download(repo_id, filename, target_basename):
@@ -173,16 +173,16 @@ def hf_download():
     def process_lora_zip(zip_path, target_dir, base_alias="Instagirlv2.5"):
         """
         Extracts a Civitai LoRA zip and moves .safetensors into target_dir.
-        Also creates two convenient symlinks (if high/low can be inferred):
-          - {base_alias}_high_noise.safetensors
-          - {base_alias}_low_noise.safetensors
+        Writes two canonical files (real copies, no symlinks):
+          - Instagirlv2.5-HIGH.safetensors
+          - Instagirlv2.5-LOW.safetensors
+        Heuristics detect 'high' vs 'low' in filenames; if ambiguous, assigns by alphabetical.
         """
         print(f"Extracting: {zip_path}")
         with tempfile.TemporaryDirectory() as td:
             with zipfile.ZipFile(zip_path, "r") as zf:
                 zf.extractall(td)
 
-            # Collect .safetensors files and move to target_dir
             extracted = []
             for root, _, files in os.walk(td):
                 for fn in files:
@@ -194,29 +194,41 @@ def hf_download():
                         extracted.append(dst)
                         print(f"→ Placed LoRA: {dst}")
 
-        # Try to infer high/low from filenames and create stable aliases
+        # Identify high vs low
         high_pat = re.compile(r"(?:^|[-_])high(?:[-_]?noise)?(?:[-_.]|$)", re.IGNORECASE)
         low_pat  = re.compile(r"(?:^|[-_])low(?:[-_]?noise)?(?:[-_.]|$)",  re.IGNORECASE)
 
         high_file = next((p for p in extracted if high_pat.search(os.path.basename(p))), None)
         low_file  = next((p for p in extracted if low_pat.search(os.path.basename(p))),  None)
 
-        def safe_symlink(src, alias_name):
-            alias_path = os.path.join(target_dir, alias_name)
+        # If patterns failed but we have exactly two files, assign deterministically
+        remaining = [p for p in extracted if p not in {high_file, low_file}]
+        if not (high_file and low_file) and len(extracted) == 2:
+            a, b = sorted(extracted)  # deterministic choice
+            if not high_file:
+                high_file = a
+            if not low_file:
+                low_file = b
+
+        # Final target names
+        HIGH_TARGET = os.path.join(target_dir, f"{base_alias}-HIGH.safetensors")
+        LOW_TARGET  = os.path.join(target_dir, f"{base_alias}-LOW.safetensors")
+
+        def write_canonical(src, dst, label):
+            if not src:
+                print(f"!! Could not determine {label} file from ZIP; leaving as-is.")
+                return
             try:
-                if os.path.islink(alias_path) or os.path.exists(alias_path):
-                    os.remove(alias_path)
-                os.symlink(src, alias_path)
-                print(f"✓ Symlinked {alias_name} -> {os.path.basename(src)}")
+                # Overwrite with a real copy to ensure dropdowns see it
+                shutil.copyfile(src, dst)
+                print(f"✓ Wrote {label}: {dst} (from {os.path.basename(src)})")
             except Exception as e:
-                print(f"Symlink failed for {alias_name}: {e}")
+                print(f"Copy failed for {label}: {e}")
 
-        if high_file:
-            safe_symlink(high_file, f"{base_alias}_high_noise.safetensors")
-        if low_file:
-            safe_symlink(low_file,  f"{base_alias}_low_noise.safetensors")
+        write_canonical(high_file, HIGH_TARGET, "HIGH")
+        write_canonical(low_file,  LOW_TARGET,  "LOW")
 
-        # Optionally remove the original ZIP to keep the image slim
+        # Clean up the original ZIP to keep image slim
         try:
             os.remove(zip_path)
         except Exception:
@@ -234,7 +246,7 @@ def hf_download():
         print(f"Failed to download/process Instagirlv2.5 ZIP: {e}")
         print("Manual link: https://civitai.com/models/1822984?modelVersionId=2180477")
 
-    # If you still want to grab another single-file LoRA from Civitai, here's a simple helper:
+    # Optional: another single-file LoRA example
     def download_civitai_file(model_version_id, filename, target_dir):
         target_path = os.path.join(target_dir, filename)
         url = f"https://civitai.com/api/download/models/{model_version_id}"
@@ -285,7 +297,8 @@ def ui():
     os.environ["COMFYUI_MODEL_DIR"] = "/root/comfy/ComfyUI/models"
 
     # Sanity logs to ensure files and node are present (helps when dropdown is empty)
-    subprocess.run("pwd && ls -la /root/comfy/ComfyUI/models/unet || true", shell=True, check=False)
+    subprocess.run("pwd && ls -la /root/comfy/ComfyUI/models/loras || true", shell=True, check=False)
+    subprocess.run("ls -la /root/comfy/ComfyUI/models/unet || true", shell=True, check=False)
     subprocess.run("ls -la /root/comfy/ComfyUI/custom_nodes/ComfyUI-GGUF || true", shell=True, check=False)
 
     # Launch ComfyUI
