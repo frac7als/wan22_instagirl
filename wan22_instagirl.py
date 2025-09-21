@@ -65,16 +65,12 @@ def hf_download():
 
     # ========================================================================
     # WAN UNET (GGUF) MODELS — for ComfyUI-GGUF's UnetLoaderGGUF
-    # Uses QuantStack repo/paths. Keeps Phr00t as fallback.
-    # Also creates a physical copy to avoid symlink edge cases in dropdowns.
     # ========================================================================
     def hf_try_download(repo_id, filename, target_basename):
         try:
             p = hf_hub_download(repo_id=repo_id, filename=filename, cache_dir="/cache")
             target_path = os.path.join(unet_dir, target_basename)
-            # Symlink to cache (fast, keeps cache benefits)
             subprocess.run(f"ln -sf {p} {target_path}", shell=True, check=True)
-            # ALSO copy to ensure dropdowns see a real file even if symlinks are ignored
             subprocess.run(f"cp -f {p} {target_path}.copy", shell=True, check=True)
             print(f"✔ Downloaded {target_basename} from {repo_id}/{filename}")
             return True
@@ -82,7 +78,7 @@ def hf_download():
             print(f"✖ Fallback: {repo_id}/{filename} not available ({e})")
             return False
 
-    # LowNoise GGUF (exact name used by the workflow)
+    # LowNoise GGUF
     if not (
         hf_try_download(
             "QuantStack/Wan2.2-T2V-A14B-GGUF",
@@ -95,9 +91,9 @@ def hf_download():
             "Wan2.2-T2V-A14B-LowNoise-Q8_0.gguf",
         )
     ):
-        print("!! Could not fetch LowNoise GGUF. Please provide an alternate repo/path.")
+        print("!! Could not fetch LowNoise GGUF.")
 
-    # HighNoise GGUF (exact name used by the workflow)
+    # HighNoise GGUF
     if not (
         hf_try_download(
             "QuantStack/Wan2.2-T2V-A14B-GGUF",
@@ -110,10 +106,10 @@ def hf_download():
             "Wan2.2-T2V-A14B-HighNoise-Q8_0.gguf",
         )
     ):
-        print("!! Could not fetch HighNoise GGUF. Please provide an alternate repo/path.")
+        print("!! Could not fetch HighNoise GGUF.")
 
     # ========================================================================
-    # VAE MODEL (safetensors as required by your workflow)
+    # VAE & TEXT ENCODER
     # ========================================================================
     vae_model = hf_hub_download(
         repo_id="Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
@@ -126,9 +122,6 @@ def hf_download():
         check=True,
     )
 
-    # ========================================================================
-    # TEXT ENCODER (safetensors as required by your workflow)
-    # ========================================================================
     t5_model = hf_hub_download(
         repo_id="Comfy-Org/Wan_2.1_ComfyUI_repackaged",
         filename="split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
@@ -141,10 +134,8 @@ def hf_download():
     )
 
     # ========================================================================
-    # LORA MODELS
+    # WAN LightX2V LoRA
     # ========================================================================
-
-    # WAN LightX2V LoRA (for low noise model)
     lightx2v_lora = hf_hub_download(
         repo_id="Kijai/WanVideo_comfy",
         filename="Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors",
@@ -156,13 +147,14 @@ def hf_download():
         check=True,
     )
 
-    # ---------- Civitai helpers ----------
+    # ========================================================================
+    # Instagirlv2.5 ZIP handling
+    # ========================================================================
     def download_civitai_zip(model_version_id, filename, target_dir):
-        """Download a ZIP from CivitAI using modelVersionId to target_dir/filename"""
         target_path = os.path.join(target_dir, filename)
         url = f"https://civitai.com/api/download/models/{model_version_id}"
         print(f"Downloading ZIP {filename} from CivitAI...")
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        headers = {"User-Agent": "Mozilla/5.0"}
         r = requests.get(url, stream=True, headers=headers)
         r.raise_for_status()
         with open(target_path, "wb") as f:
@@ -171,114 +163,74 @@ def hf_download():
         return target_path
 
     def process_lora_zip(zip_path, target_dir, base_alias="Instagirlv2.5"):
-        """
-        Extracts a Civitai LoRA zip and moves .safetensors into target_dir.
-        Writes two canonical files (real copies, no symlinks):
-          - Instagirlv2.5-HIGH.safetensors
-          - Instagirlv2.5-LOW.safetensors
-        Heuristics detect 'high' vs 'low' in filenames; if ambiguous, assigns by alphabetical.
-        """
+        import zipfile, tempfile, re, shutil
+
         print(f"Extracting: {zip_path}")
         with tempfile.TemporaryDirectory() as td:
             with zipfile.ZipFile(zip_path, "r") as zf:
                 zf.extractall(td)
 
-            extracted = []
+            # Find .safetensors inside
+            found = []
             for root, _, files in os.walk(td):
                 for fn in files:
                     if fn.lower().endswith(".safetensors"):
-                        src = os.path.join(root, fn)
-                        dst = os.path.join(target_dir, fn)
-                        os.makedirs(target_dir, exist_ok=True)
-                        shutil.move(src, dst)
-                        extracted.append(dst)
-                        print(f"→ Placed LoRA: {dst}")
+                        found.append(os.path.join(root, fn))
 
-        # Identify high vs low
-        high_pat = re.compile(r"(?:^|[-_])high(?:[-_]?noise)?(?:[-_.]|$)", re.IGNORECASE)
-        low_pat  = re.compile(r"(?:^|[-_])low(?:[-_]?noise)?(?:[-_.]|$)",  re.IGNORECASE)
+            if not found:
+                raise RuntimeError("No .safetensors found in ZIP")
 
-        high_file = next((p for p in extracted if high_pat.search(os.path.basename(p))), None)
-        low_file  = next((p for p in extracted if low_pat.search(os.path.basename(p))),  None)
+            os.makedirs(target_dir, exist_ok=True)
+            copied = []
+            for src in found:
+                dst = os.path.join(target_dir, os.path.basename(src))
+                shutil.copyfile(src, dst)
+                copied.append(dst)
+                print(f"→ Copied {dst}")
 
-        # If patterns failed but we have exactly two files, assign deterministically
-        remaining = [p for p in extracted if p not in {high_file, low_file}]
-        if not (high_file and low_file) and len(extracted) == 2:
-            a, b = sorted(extracted)  # deterministic choice
-            if not high_file:
-                high_file = a
-            if not low_file:
-                low_file = b
+        # Detect high/low
+        high_pat = re.compile(r"high", re.IGNORECASE)
+        low_pat = re.compile(r"low", re.IGNORECASE)
 
-        # Final target names
+        high_file = next((p for p in copied if high_pat.search(os.path.basename(p))), None)
+        low_file = next((p for p in copied if low_pat.search(os.path.basename(p))), None)
+
+        if not (high_file and low_file) and len(copied) == 2:
+            a, b = sorted(copied)
+            if not high_file: high_file = a
+            if not low_file:  low_file = b
+
         HIGH_TARGET = os.path.join(target_dir, f"{base_alias}-HIGH.safetensors")
         LOW_TARGET  = os.path.join(target_dir, f"{base_alias}-LOW.safetensors")
 
         def write_canonical(src, dst, label):
             if not src:
-                print(f"!! Could not determine {label} file from ZIP; leaving as-is.")
+                print(f"!! No {label} file found")
                 return
-            try:
-                # Overwrite with a real copy to ensure dropdowns see it
-                shutil.copyfile(src, dst)
-                print(f"✓ Wrote {label}: {dst} (from {os.path.basename(src)})")
-            except Exception as e:
-                print(f"Copy failed for {label}: {e}")
+            shutil.copyfile(src, dst)
+            os.chmod(dst, 0o644)
+            print(f"✓ Wrote {label}: {dst}")
 
         write_canonical(high_file, HIGH_TARGET, "HIGH")
-        write_canonical(low_file,  LOW_TARGET,  "LOW")
+        write_canonical(low_file, LOW_TARGET, "LOW")
 
-        # Clean up the original ZIP to keep image slim
-        try:
-            os.remove(zip_path)
-        except Exception:
-            pass
+        try: os.remove(zip_path)
+        except: pass
 
-    # Instagirlv2.5 LoRA (ZIP that includes high_noise & low_noise)
     try:
-        zip_path = download_civitai_zip(
-            "2180477",                # modelVersionId for Instagirl v2.5
-            "Instagirlv2.5.zip",      # saved filename
-            lora_dir
-        )
-        process_lora_zip(zip_path, lora_dir, base_alias="Instagirlv2.5")
+        zip_path = download_civitai_zip("2180477", "Instagirlv2.5.zip", lora_dir)
+        process_lora_zip(zip_path, lora_dir)
     except Exception as e:
-        print(f"Failed to download/process Instagirlv2.5 ZIP: {e}")
-        print("Manual link: https://civitai.com/models/1822984?modelVersionId=2180477")
-
-    # Optional: another single-file LoRA example
-    def download_civitai_file(model_version_id, filename, target_dir):
-        target_path = os.path.join(target_dir, filename)
-        url = f"https://civitai.com/api/download/models/{model_version_id}"
-        print(f"Downloading {filename} from CivitAI...")
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        r = requests.get(url, stream=True, headers=headers)
-        r.raise_for_status()
-        with open(target_path, "wb") as f:
-            shutil.copyfileobj(r.raw, f)
-        print(f"Downloaded {filename} successfully!")
-        return target_path
-
-    # Example: l3n0v0 LoRA (single file)
-    try:
-        download_civitai_file(
-            "2006914",           # modelVersionId
-            "l3n0v0.safetensors",
-            lora_dir,
-        )
-    except Exception as e:
-        print(f"Failed to download l3n0v0 LoRA: {e}")
+        print(f"Failed Instagirlv2.5: {e}")
 
     print("All model downloads completed!")
 
 vol = modal.Volume.from_name("hf-hub-cache", create_if_missing=True)
 
 image = (
-    # install huggingface_hub with hf_transfer support to speed up downloads
     image.pip_install("huggingface_hub[hf_transfer]>=0.34.0,<1.0", "requests")
     .run_function(
         hf_download,
-        # persist the HF cache to a Modal Volume so future runs don't re-download models
         volumes={"/cache": vol},
     )
 )
@@ -293,13 +245,16 @@ app = modal.App(name="instagirlv23-comfyui", image=image)
 @modal.concurrent(max_inputs=10)
 @modal.web_server(8000, startup_timeout=60)
 def ui():
-    # Ensure ComfyUI sees the models directory we populated
     os.environ["COMFYUI_MODEL_DIR"] = "/root/comfy/ComfyUI/models"
 
-    # Sanity logs to ensure files and node are present (helps when dropdown is empty)
-    subprocess.run("pwd && ls -la /root/comfy/ComfyUI/models/loras || true", shell=True, check=False)
+    print("\n=== LORA INVENTORY ===")
+    subprocess.run("ls -la /root/comfy/ComfyUI/models/loras || true", shell=True, check=False)
+    subprocess.run("sha256sum /root/comfy/ComfyUI/models/loras/Instagirlv2.5-*.safetensors || true", shell=True, check=False)
+
+    print("\n=== UNET INVENTORY ===")
     subprocess.run("ls -la /root/comfy/ComfyUI/models/unet || true", shell=True, check=False)
+
+    print("\n=== GGUF NODE PRESENCE ===")
     subprocess.run("ls -la /root/comfy/ComfyUI/custom_nodes/ComfyUI-GGUF || true", shell=True, check=False)
 
-    # Launch ComfyUI
     subprocess.Popen("comfy launch -- --listen 0.0.0.0 --port 8000", shell=True)
