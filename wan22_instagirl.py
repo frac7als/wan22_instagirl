@@ -118,7 +118,7 @@ def hf_download():
     # WAN LightX2V LoRA (for low noise model)
     lightx2v_lora = hf_hub_download(
         repo_id="Kijai/WanVideo_comfy",
-        filename="Lightx2v/Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors",
+        filename="Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors",
         cache_dir="/cache",
     )
     subprocess.run(
