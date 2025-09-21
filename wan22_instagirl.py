@@ -52,42 +52,65 @@ def hf_download():
     vae_dir = "/root/comfy/ComfyUI/models/vae"
     text_encoders_dir = "/root/comfy/ComfyUI/models/text_encoders"
     lora_dir = "/root/comfy/ComfyUI/models/loras"
-    
+    unet_dir = "/root/comfy/ComfyUI/models/unet"  # for GGUF models used by UnetLoaderGGUF
+
     os.makedirs(diffusion_models_dir, exist_ok=True)
     os.makedirs(vae_dir, exist_ok=True)
     os.makedirs(text_encoders_dir, exist_ok=True)
     os.makedirs(lora_dir, exist_ok=True)
+    os.makedirs(unet_dir, exist_ok=True)
 
     # ========================================================================
-    # WAN DIFFUSION MODELS (SafeTensors format)
+    # WAN UNET (GGUF) MODELS — for ComfyUI-GGUF's UnetLoaderGGUF
+    # Replaces prior safetensors diffusion model downloads.
+    # Filenames match the workflow exactly.
     # ========================================================================
-    
-    # High Noise Model
-    wan_model_high_noise = hf_hub_download(
-        repo_id="Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
-        filename="split_files/diffusion_models/wan2.2_i2v_high_noise_14B_fp16.safetensors",
-        cache_dir="/cache",
-    )
-    subprocess.run(
-        f"ln -sf {wan_model_high_noise} {os.path.join(diffusion_models_dir, 'wan2.2_i2v_high_noise_14B_fp16.safetensors')}",
-        shell=True,
-        check=True,
-    )
-    
-    # Low Noise Model
-    wan_model_low_noise = hf_hub_download(
-        repo_id="Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
-        filename="split_files/diffusion_models/wan2.2_i2v_low_noise_14B_fp16.safetensors",
-        cache_dir="/cache",
-    )
-    subprocess.run(
-        f"ln -sf {wan_model_low_noise} {os.path.join(diffusion_models_dir, 'wan2.2_i2v_low_noise_14B_fp16.safetensors')}",
-        shell=True,
-        check=True,
-    )
+    def hf_try_download(repo_id, filename, target_basename):
+        try:
+            p = hf_hub_download(repo_id=repo_id, filename=filename, cache_dir="/cache")
+            subprocess.run(
+                f"ln -sf {p} {os.path.join(unet_dir, target_basename)}",
+                shell=True,
+                check=True,
+            )
+            print(f"✔ Downloaded {target_basename} from {repo_id}/{filename}")
+            return True
+        except Exception as e:
+            print(f"✖ Fallback: {repo_id}/{filename} not available ({e})")
+            return False
+
+    # LowNoise GGUF (exact name used by the workflow)
+    if not (
+        hf_try_download(
+            "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+            "split_files/gguf/Wan2.2-T2V-A14B-LowNoise-Q8_0.gguf",
+            "Wan2.2-T2V-A14B-LowNoise-Q8_0.gguf",
+        )
+        or hf_try_download(
+            "Phr00t/WAN2.2-14B-Rapid-AllInOne",
+            "Wan2.2-T2V-A14B-LowNoise-Q8_0.gguf",
+            "Wan2.2-T2V-A14B-LowNoise-Q8_0.gguf",
+        )
+    ):
+        print("!! Could not fetch LowNoise GGUF. Please provide an alternate repo/path.")
+
+    # HighNoise GGUF (exact name used by the workflow)
+    if not (
+        hf_try_download(
+            "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+            "split_files/gguf/Wan2.2-T2V-A14B-HighNoise-Q8_0.gguf",
+            "Wan2.2-T2V-A14B-HighNoise-Q8_0.gguf",
+        )
+        or hf_try_download(
+            "Phr00t/WAN2.2-14B-Rapid-AllInOne",
+            "Wan2.2-T2V-A14B-HighNoise-Q8_0.gguf",
+            "Wan2.2-T2V-A14B-HighNoise-Q8_0.gguf",
+        )
+    ):
+        print("!! Could not fetch HighNoise GGUF. Please provide an alternate repo/path.")
 
     # ========================================================================
-    # VAE MODEL
+    # VAE MODEL (safetensors as required by your workflow)
     # ========================================================================
     vae_model = hf_hub_download(
         repo_id="Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
@@ -101,7 +124,7 @@ def hf_download():
     )
 
     # ========================================================================
-    # TEXT ENCODER
+    # TEXT ENCODER (safetensors as required by your workflow)
     # ========================================================================
     t5_model = hf_hub_download(
         repo_id="Comfy-Org/Wan_2.1_ComfyUI_repackaged",
@@ -117,7 +140,7 @@ def hf_download():
     # ========================================================================
     # LORA MODELS
     # ========================================================================
-    
+
     # WAN LightX2V LoRA (for low noise model)
     lightx2v_lora = hf_hub_download(
         repo_id="Kijai/WanVideo_comfy",
@@ -133,48 +156,44 @@ def hf_download():
     # ========================================================================
     # CIVITAI DOWNLOADS (LoRA Models)
     # ========================================================================
-    
     def download_civitai_file(model_version_id, filename, target_dir):
         """Download file from CivitAI using model version ID"""
         target_path = os.path.join(target_dir, filename)
         url = f"https://civitai.com/api/download/models/{model_version_id}"
         print(f"Downloading {filename} from CivitAI...")
-        
+
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         }
-        
+
         response = requests.get(url, stream=True, headers=headers)
         response.raise_for_status()
-        
-        with open(target_path, 'wb') as f:
-            shutil.copyfileobj(response.raw, f)
+
+        import shutil as _shutil
+        with open(target_path, "wb") as f:
+            _shutil.copyfileobj(response.raw, f)
         print(f"Downloaded {filename} successfully!")
 
-    # Instagirlv2.5 LoRA (correct version ID from the provided link)
-    # Model Version ID: 2180477 (from modelVersionId parameter in the URL)
+    # Instagirlv2.5 LoRA (modelVersionId=2180477)
     try:
         download_civitai_file(
-            "2180477",  # Correct version ID for v2.5
+            "2180477",
             "Instagirlv2.5.safetensors",
-            lora_dir
+            lora_dir,
         )
     except Exception as e:
         print(f"Failed to download Instagirlv2.5 LoRA: {e}")
         print("Manual download available at: https://civitai.com/models/1822984?modelVersionId=2180477")
-    
-    # l3n0v0 LoRA (from second image)
-    # Model Version ID: 2006914 (from the URL in your second image)
+
+    # l3n0v0 LoRA (modelVersionId=2006914)
     try:
         download_civitai_file(
             "2006914",
-            "l3n0v0.safetensors", 
-            lora_dir
+            "l3n0v0.safetensors",
+            lora_dir,
         )
     except Exception as e:
         print(f"Failed to download l3n0v0 LoRA: {e}")
-    
-    # Note: Skipping Instamodel_1 LoRA as requested
 
     print("All model downloads completed!")
 
@@ -191,7 +210,6 @@ image = (
 )
 
 app = modal.App(name="instagirlv23-comfyui", image=image)
-
 
 @app.function(
     max_containers=1,
